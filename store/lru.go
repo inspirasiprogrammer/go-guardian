@@ -1,7 +1,6 @@
 package store
 
 import (
-	"container/list"
 	"net/http"
 	"sync"
 	"time"
@@ -24,8 +23,7 @@ type LRU struct {
 
 	MU *sync.Mutex
 
-	ll    *list.List
-	cache map[string]*list.Element
+	cache *cache
 }
 
 // New creates a new LRU Cache.
@@ -34,8 +32,6 @@ type LRU struct {
 func New(maxEntries int) *LRU {
 	return &LRU{
 		MaxEntries: maxEntries,
-		ll:         list.New(),
-		cache:      make(map[string]*list.Element),
 		MU:         new(sync.Mutex),
 	}
 }
@@ -45,30 +41,10 @@ func (l *LRU) Store(key string, value interface{}, _ *http.Request) error {
 	l.MU.Lock()
 	defer l.MU.Unlock()
 
-	if l.cache == nil {
-		l.cache = make(map[string]*list.Element)
-		l.ll = list.New()
-	}
+	e := l.cache.store(key, value)
+	l.cache.list.MoveToFront(e)
 
-	if ee, ok := l.cache[key]; ok {
-		l.ll.MoveToFront(ee)
-		r := ee.Value.(*record)
-		r.Value = value
-		l.withTTL(r)
-		return nil
-	}
-
-	r := &record{
-		Key:   key,
-		Value: value,
-	}
-
-	l.withTTL(r)
-
-	ele := l.ll.PushFront(r)
-	l.cache[key] = ele
-
-	if l.MaxEntries != 0 && l.ll.Len() > l.MaxEntries {
+	if l.MaxEntries != 0 && l.cache.len() > l.MaxEntries {
 		l.removeOldest()
 	}
 
@@ -79,19 +55,8 @@ func (l *LRU) Store(key string, value interface{}, _ *http.Request) error {
 func (l *LRU) Update(key string, value interface{}, _ *http.Request) error {
 	l.MU.Lock()
 	defer l.MU.Unlock()
-
-	if e, ok := l.cache[key]; ok {
-		r := e.Value.(*record)
-		r.Value = value
-	}
-
+	l.cache.update(key, value)
 	return nil
-}
-
-func (l *LRU) withTTL(r *record) {
-	if l.TTL > 0 {
-		r.Exp = time.Now().UTC().Add(l.TTL)
-	}
 }
 
 // Load returns the value stored in the Cache for a key, or nil if no value is present.
@@ -100,40 +65,37 @@ func (l *LRU) Load(key string, _ *http.Request) (interface{}, bool, error) {
 	l.MU.Lock()
 	defer l.MU.Unlock()
 
-	if l.cache == nil {
-		return nil, false, nil
+	e, ok, err := l.cache.load(key)
+
+	if ok && err == nil {
+		l.cache.list.MoveToFront(e)
+		return e.Value.(*record).Value, ok, err
 	}
 
-	if ele, hit := l.cache[key]; hit {
-		r := ele.Value.(*record)
+	return nil, ok, err
+}
 
-		if l.TTL > 0 {
-			if time.Now().UTC().After(r.Exp) {
-				l.removeElement(ele)
-				return nil, false, ErrCachedExp
-			}
-		}
+// Peek returns the value stored in the Cache for a key
+// without updating the "recently used", or nil if no value is present.
+// The ok result indicates whether value was found in the Cache.
+func (l *LRU) Peek(key string, _ *http.Request) (interface{}, bool, error) {
+	l.MU.Lock()
+	defer l.MU.Unlock()
 
-		l.ll.MoveToFront(ele)
-		return r.Value, true, nil
+	e, ok, err := l.cache.load(key)
+
+	if ok && err == nil {
+		return e.Value.(*record).Value, ok, err
 	}
 
-	return nil, false, nil
+	return nil, ok, err
 }
 
 // Delete the value for a key.
 func (l *LRU) Delete(key string, _ *http.Request) error {
 	l.MU.Lock()
 	defer l.MU.Unlock()
-
-	if l.cache == nil {
-		return nil
-	}
-
-	if ele, hit := l.cache[key]; hit {
-		l.removeElement(ele)
-	}
-
+	l.cache.delete(key)
 	return nil
 }
 
@@ -145,21 +107,8 @@ func (l *LRU) RemoveOldest() {
 }
 
 func (l *LRU) removeOldest() {
-	if l.cache == nil {
-		return
-	}
-
-	if ele := l.ll.Back(); ele != nil {
-		l.removeElement(ele)
-	}
-}
-
-func (l *LRU) removeElement(e *list.Element) {
-	l.ll.Remove(e)
-	kv := e.Value.(*record)
-	delete(l.cache, kv.Key)
-	if l.OnEvicted != nil {
-		l.OnEvicted(kv.Key, kv.Value)
+	if e := l.cache.list.Back(); e != nil {
+		l.cache.evict(e)
 	}
 }
 
@@ -167,39 +116,19 @@ func (l *LRU) removeElement(e *list.Element) {
 func (l *LRU) Len() int {
 	l.MU.Lock()
 	defer l.MU.Unlock()
-
-	if l.cache == nil {
-		return 0
-	}
-
-	return l.ll.Len()
+	return l.cache.len()
 }
 
 // Clear purges all stored items from the cache.
 func (l *LRU) Clear() {
 	l.MU.Lock()
 	defer l.MU.Unlock()
-
-	if l.OnEvicted != nil {
-		for _, e := range l.cache {
-			kv := e.Value.(*record)
-			l.OnEvicted(kv.Key, kv.Value)
-		}
-	}
-
-	l.ll = nil
-	l.cache = nil
+	l.cache.clear()
 }
 
 // Keys return cache records keys.
 func (l *LRU) Keys() []string {
 	l.MU.Lock()
 	defer l.MU.Unlock()
-	keys := make([]string, 0)
-
-	for k := range l.cache {
-		keys = append(keys, k)
-	}
-
-	return keys
+	return l.cache.keys()
 }

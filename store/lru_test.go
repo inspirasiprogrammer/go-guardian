@@ -4,7 +4,6 @@ import (
 	"fmt"
 	"net/http"
 	"testing"
-	"time"
 
 	"github.com/stretchr/testify/assert"
 )
@@ -91,32 +90,32 @@ func TestLRU(t *testing.T) {
 }
 
 func TestLRUUpdate(t *testing.T) {
-	cache := New(2)
-	cache.Store("1", 1, nil)
-	cache.Store("2", 2, nil)
+	lru := New(2)
+	lru.Store("1", 1, nil)
+	lru.Store("2", 2, nil)
 
-	err := cache.Update("1", 0, nil)
-	r := cache.ll.Back().Value.(*record)
+	err := lru.Update("1", 0, nil)
+	r := lru.cache.list.Back().Value.(*record)
 
 	assert.NoError(t, err)
 	assert.Equal(t, "1", r.Key)
 	assert.Equal(t, 0, r.Value)
 }
 
-func TestTTLLRU(t *testing.T) {
-	cache := New(2)
-	cache.TTL = time.Nanosecond * 100
+func TestLRUPeek(t *testing.T) {
+	lru := New(2)
+	lru.Store("1", 1, nil)
+	lru.Store("2", 2, nil)
 
-	_ = cache.Store("key", "value", nil)
+	v, ok, err := lru.Peek("1", nil)
+	r := lru.cache.list.Back().Value.(*record)
 
-	time.Sleep(time.Nanosecond * 110)
-
-	v, ok, err := cache.Load("key", nil)
-
-	assert.Equal(t, ErrCachedExp, err)
-	assert.False(t, ok)
-	assert.Nil(t, v)
+	assert.NoError(t, err)
+	assert.True(t, ok)
+	assert.Equal(t, 1, v)
+	assert.Equal(t, "1", r.Key)
 }
+
 
 func TestLRUEvict(t *testing.T) {
 	evictedKeys := make([]string, 0)
