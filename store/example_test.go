@@ -47,23 +47,23 @@ func ExampleLRU() {
 	// <nil> false
 }
 
-func ExampleReplicator() {
-	lru := New(20)
-	fileSystem := NewFileSystem(context.TODO(), 0, "/tmp")
-	replicator := Replicator{
-		Persistent: fileSystem,
-		InMemory:   lru,
-	}
+// func ExampleReplicator() {
+// 	lru := New(20)
+// 	fileSystem := NewFileSystem(context.TODO(), 0, "/tmp")
+// 	replicator := Replicator{
+// 		Persistent: fileSystem,
+// 		InMemory:   lru,
+// 	}
 
-	replicator.Store("key", "value", nil)
+// 	replicator.Store("key", "value", nil)
 
-	v, _, _ := lru.Load("key", nil)
-	fmt.Println(v)
+// 	v, _, _ := lru.Load("key", nil)
+// 	fmt.Println(v)
 
-	v, _, _ = fileSystem.Load("key", nil)
-	fmt.Println(v)
+// 	v, _, _ = fileSystem.Load("key", nil)
+// 	fmt.Println(v)
 
-	// Output:
-	// value
-	// value
-}
+// 	// Output:
+// 	// value
+// 	// value
+// }

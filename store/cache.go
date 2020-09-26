@@ -5,7 +5,6 @@ package store
 import (
 	"errors"
 	"net/http"
-	"time"
 )
 
 // ErrCachedExp returned by cache when cached record have expired,
@@ -40,9 +39,3 @@ func (NoCache) Store(_ string, _ interface{}, _ *http.Request) (err error)      
 func (NoCache) Load(_ string, _ *http.Request) (v interface{}, ok bool, err error) { return } // nolint:golint
 func (NoCache) Delete(_ string, _ *http.Request) (err error)                       { return } // nolint:golint
 func (NoCache) Keys() (keys []string)                                              { return } // nolint:golint
-
-type record struct {
-	Exp   time.Time
-	Key   string
-	Value interface{}
-}

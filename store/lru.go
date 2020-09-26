@@ -24,8 +24,7 @@ type LRU struct {
 
 	MU *sync.Mutex
 
-	ll    *list.List
-	cache map[string]*list.Element
+	c *core
 }
 
 // New creates a new LRU Cache.
@@ -34,9 +33,11 @@ type LRU struct {
 func New(maxEntries int) *LRU {
 	return &LRU{
 		MaxEntries: maxEntries,
-		ll:         list.New(),
-		cache:      make(map[string]*list.Element),
 		MU:         new(sync.Mutex),
+		c: &core{
+			ll:    list.New(),
+			cache: make(map[string]*list.Element),
+		},
 	}
 }
 
@@ -44,35 +45,21 @@ func New(maxEntries int) *LRU {
 func (l *LRU) Store(key string, value interface{}, _ *http.Request) error {
 	l.MU.Lock()
 	defer l.MU.Unlock()
+	l.set()
 
-	if l.cache == nil {
-		l.cache = make(map[string]*list.Element)
-		l.ll = list.New()
-	}
+	e := l.c.store(key, value)
+	l.c.ll.MoveToFront(e)
 
-	if ee, ok := l.cache[key]; ok {
-		l.ll.MoveToFront(ee)
-		r := ee.Value.(*record)
-		r.Value = value
-		l.withTTL(r)
-		return nil
-	}
-
-	r := &record{
-		Key:   key,
-		Value: value,
-	}
-
-	l.withTTL(r)
-
-	ele := l.ll.PushFront(r)
-	l.cache[key] = ele
-
-	if l.MaxEntries != 0 && l.ll.Len() > l.MaxEntries {
+	if l.MaxEntries != 0 && l.c.ll.Len() > l.MaxEntries {
 		l.removeOldest()
 	}
 
 	return nil
+}
+
+func (l *LRU) set() {
+	l.c.onEvicted = l.OnEvicted
+	l.c.ttl = l.TTL
 }
 
 func (l *LRU) withTTL(r *record) {
@@ -87,25 +74,18 @@ func (l *LRU) Load(key string, _ *http.Request) (interface{}, bool, error) {
 	l.MU.Lock()
 	defer l.MU.Unlock()
 
-	if l.cache == nil {
+	if l.c == nil {
 		return nil, false, nil
 	}
 
-	if ele, hit := l.cache[key]; hit {
-		r := ele.Value.(*record)
+	e, ok, err := l.c.load(key)
 
-		if l.TTL > 0 {
-			if time.Now().UTC().After(r.Exp) {
-				l.removeElement(ele)
-				return nil, false, ErrCachedExp
-			}
-		}
-
-		l.ll.MoveToFront(ele)
-		return r.Value, true, nil
+	if ok && err == nil {
+		l.c.ll.MoveToFront(e)
+		return e.Value.(*record).Value, ok, err
 	}
 
-	return nil, false, nil
+	return nil, ok, err
 }
 
 // Delete the value for a key.
@@ -113,13 +93,11 @@ func (l *LRU) Delete(key string, _ *http.Request) error {
 	l.MU.Lock()
 	defer l.MU.Unlock()
 
-	if l.cache == nil {
+	if l.c == nil {
 		return nil
 	}
 
-	if ele, hit := l.cache[key]; hit {
-		l.removeElement(ele)
-	}
+	l.c.delete(key)
 
 	return nil
 }
@@ -132,34 +110,26 @@ func (l *LRU) RemoveOldest() {
 }
 
 func (l *LRU) removeOldest() {
-	if l.cache == nil {
+	if l.c == nil {
 		return
 	}
 
-	if ele := l.ll.Back(); ele != nil {
-		l.removeElement(ele)
+	if ele := l.c.ll.Back(); ele != nil {
+		l.c.removeElement(ele)
 	}
 }
 
-func (l *LRU) removeElement(e *list.Element) {
-	l.ll.Remove(e)
-	kv := e.Value.(*record)
-	delete(l.cache, kv.Key)
-	if l.OnEvicted != nil {
-		l.OnEvicted(kv.Key, kv.Value)
-	}
-}
 
 // Len returns the number of items in the cache.
 func (l *LRU) Len() int {
 	l.MU.Lock()
 	defer l.MU.Unlock()
 
-	if l.cache == nil {
+	if l.c == nil {
 		return 0
 	}
 
-	return l.ll.Len()
+	return l.c.ll.Len()
 }
 
 // Clear purges all stored items from the cache.
@@ -168,25 +138,17 @@ func (l *LRU) Clear() {
 	defer l.MU.Unlock()
 
 	if l.OnEvicted != nil {
-		for _, e := range l.cache {
+		for _, e := range l.c.cache {
 			kv := e.Value.(*record)
 			l.OnEvicted(kv.Key, kv.Value)
 		}
 	}
-
-	l.ll = nil
-	l.cache = nil
 }
 
 // Keys return cache records keys.
 func (l *LRU) Keys() []string {
 	l.MU.Lock()
 	defer l.MU.Unlock()
-	keys := make([]string, 0)
 
-	for k := range l.cache {
-		keys = append(keys, k)
-	}
-
-	return keys
+	return l.c.keys()
 }
